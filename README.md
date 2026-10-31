@@ -32,13 +32,13 @@ Firestore security rules ensure that authenticated users can only read and write
 ## Screenshots
 
 ### Login Screen
-![Login Screen](../screenshots/login.png)
+![Login Screen](momo_wallet/screenshots/login.png)
 
 ### Firestore Database
-![Firestore Database](../screenshots/console.png)
+![Firestore Database](momo_wallet/screenshots/console.png)
 
 ### Live Updates
-![Live Updates](../screenshots/live.png)
+![Live Updates](momo_wallet/screenshots/live.png)
 
 ### User Data Isolation
-![User Data Isolation](../screenshots/denied.png)
+![User Data Isolation](momo_wallet/screenshots/denied.png)
