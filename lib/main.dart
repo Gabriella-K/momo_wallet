@@ -11,8 +11,12 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'MoMo Wallet',
-      theme: ThemeData(colorSchemeSeed: Colors.blueGrey),
+      debugShowCheckedModeBanner: false,
+      title: '4MoMo Wallet',
+      theme: ThemeData(
+        colorSchemeSeed: Colors.green,
+        useMaterial3: true,
+      ),
       home: const WalletScreen(),
     );
   }

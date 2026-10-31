@@ -1,5 +1,10 @@
+
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
+
 import '../logic/wallet.dart';
+import '../logic/rate_service.dart';
+import '../models/transaction.dart';
 import 'send_screen.dart';
 import 'cash_out_screen.dart';
 
@@ -12,100 +17,247 @@ class WalletScreen extends StatefulWidget {
 
 class _WalletScreenState extends State<WalletScreen> {
   final Wallet wallet = Wallet();
-  String filter = 'All';
 
-  final Color green = Colors.green.shade700;
-  final Color red = Colors.red.shade700;
+  double? rate;
+  bool rateLoading = true;
+  String? rateError;
+  bool walletLoading = true;
 
-  void showMessage(String text) {
-    ScaffoldMessenger.of(context).clearSnackBars();
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+  String selectedFilter = 'ALL';
+
+  @override
+  void initState() {
+    super.initState();
+    initializeWallet();
   }
 
-  // Open another screen, then redraw this one when we come back.
-  Future<void> openScreen(Widget screen) async {
-    await Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => screen),
-    );
-    setState(() {});
-  }
-
-  void deleteTransaction(int index) {
-    final t = wallet.transactions[index];
-    final error = wallet.delete(index);
-    if (error != null) {
-      showMessage(error);
-      return;
+  Future<void> initializeWallet() async {
+    try {
+      await wallet.load();
+    } catch (e) {
+      debugPrint('Wallet loading error: $e');
     }
-    setState(() {});
 
-    ScaffoldMessenger.of(context).clearSnackBars();
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: const Text('Transaction deleted'),
-        action: SnackBarAction(
-          label: 'Undo',
-          onPressed: () {
-            wallet.restore(index, t);
-            setState(() {});
-          },
+    if (!mounted) return;
+
+    setState(() {
+      walletLoading = false;
+    });
+
+    await loadRate();
+  }
+
+  Future<void> loadRate() async {
+    if (!mounted) return;
+
+    setState(() {
+      rateLoading = true;
+      rateError = null;
+    });
+
+    try {
+      final result = await fetchRate();
+
+      if (!mounted) return;
+
+      setState(() {
+        rate = result;
+        rateLoading = false;
+        rateError = null;
+      });
+    } catch (e) {
+      debugPrint('Could not load exchange rate: $e');
+
+      if (!mounted) return;
+
+      setState(() {
+        rateLoading = false;
+        rateError =
+        'Could not load the exchange rate. '
+            'Check your internet connection and try again.';
+      });
+    }
+  }
+
+  Widget rateCard() {
+    if (rateLoading) {
+      return const Card(
+        child: Padding(
+          padding: EdgeInsets.all(20),
+          child: Column(
+            children: [
+              CircularProgressIndicator(),
+              SizedBox(height: 12),
+              Text('Loading live exchange rate...'),
+            ],
+          ),
+        ),
+      );
+    }
+
+    if (rateError != null) {
+      return Card(
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            children: [
+              const Icon(
+                Icons.cloud_off,
+                size: 52,
+                color: Colors.red,
+              ),
+              const SizedBox(height: 12),
+              const Text(
+                'No internet connection',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                rateError!,
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 12),
+              ElevatedButton.icon(
+                onPressed: rateLoading ? null : loadRate,
+                icon: const Icon(Icons.refresh),
+                label: const Text('Retry'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          children: [
+            const Icon(
+              Icons.currency_exchange,
+              size: 32,
+              color: Colors.green,
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'LIVE EXCHANGE RATE',
+              style: TextStyle(
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              '1 USD = ${rate!.toStringAsFixed(2)} RWF',
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                fontSize: 20,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 4),
+            const Text(
+              'Rates by ExchangeRate-API',
+              style: TextStyle(fontSize: 11),
+            ),
+            TextButton.icon(
+              onPressed: rateLoading ? null : loadRate,
+              icon: const Icon(Icons.refresh),
+              label: const Text('Refresh rate'),
+            ),
+          ],
         ),
       ),
     );
   }
 
-  void showReceiveDialog() {
-    final descController = TextEditingController();
+  Future<void> receiveMoney() async {
+    final descriptionController = TextEditingController();
     final amountController = TextEditingController();
-    String? error;
 
-    showDialog(
+    final result = await showDialog<bool>(
       context: context,
       builder: (dialogContext) {
+        String? errorMessage;
+
         return StatefulBuilder(
           builder: (context, setDialogState) {
             return AlertDialog(
-              title: const Text('Receive money'),
+              title: const Text('Receive Money'),
               content: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   TextField(
-                    controller: descController,
-                    decoration: const InputDecoration(labelText: 'Description'),
+                    controller: descriptionController,
+                    decoration: const InputDecoration(
+                      labelText: 'Description',
+                      hintText: 'e.g. Money from a friend',
+                    ),
                   ),
+                  const SizedBox(height: 12),
                   TextField(
                     controller: amountController,
-                    decoration: const InputDecoration(labelText: 'Amount (RWF)'),
-                  ),
-                  if (error != null)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 12),
-                      child: Text(error!, style: TextStyle(color: red)),
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(
+                      labelText: 'Amount (RWF)',
                     ),
+                  ),
+                  if (errorMessage != null) ...[
+                    const SizedBox(height: 12),
+                    Text(
+                      errorMessage!,
+                      style: const TextStyle(color: Colors.red),
+                    ),
+                  ],
                 ],
               ),
               actions: [
                 TextButton(
-                  onPressed: () => Navigator.pop(dialogContext),
+                  onPressed: () =>
+                      Navigator.pop(dialogContext, false),
                   child: const Text('Cancel'),
                 ),
-                TextButton(
-                  onPressed: () {
-                    final result = wallet.receive(
-                      descController.text,
-                      amountController.text,
-                    );
-                    if (result != null) {
+                ElevatedButton(
+                  onPressed: () async {
+                    final description =
+                    descriptionController.text.trim();
+                    final amount =
+                    int.tryParse(amountController.text.trim());
+
+                    if (description.isEmpty) {
                       setDialogState(() {
-                        error = result;
+                        errorMessage =
+                        'Please enter a description.';
                       });
-                    } else {
-                      Navigator.pop(dialogContext);
-                      setState(() {});
+                      return;
+                    }
+
+                    if (amount == null || amount <= 0) {
+                      setDialogState(() {
+                        errorMessage =
+                        'Enter a valid positive amount.';
+                      });
+                      return;
+                    }
+
+                    try {
+                      await wallet.receive(description, amount);
+
+                      if (!dialogContext.mounted) return;
+
+                      Navigator.pop(dialogContext, true);
+                    } catch (e) {
+                      setDialogState(() {
+                        errorMessage = e
+                            .toString()
+                            .replaceFirst('Exception: ', '');
+                      });
                     }
                   },
-                  child: const Text('Add'),
+                  child: const Text('Receive'),
                 ),
               ],
             );
@@ -113,18 +265,119 @@ class _WalletScreenState extends State<WalletScreen> {
         );
       },
     );
+
+    descriptionController.dispose();
+    amountController.dispose();
+
+    if (result == true && mounted) {
+      setState(() {});
+    }
   }
 
-  Widget statBox(String label, String value) {
+  Future<void> openSendScreen() async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => SendScreen(wallet: wallet),
+      ),
+    );
+
+    if (mounted) {
+      setState(() {});
+    }
+  }
+
+  Future<void> openCashOutScreen() async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => CashOutScreen(wallet: wallet),
+      ),
+    );
+
+    if (mounted) {
+      setState(() {});
+    }
+  }
+
+  Future<void> deleteTransaction(Transaction transaction) async {
+    final removed =
+    await wallet.deleteTransaction(transaction);
+
+    if (!mounted) return;
+
+    setState(() {});
+
+    if (!removed) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'This transaction cannot be deleted because '
+                'it would make your balance invalid.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: const Text('Transaction deleted.'),
+        action: SnackBarAction(
+          label: 'UNDO',
+          onPressed: () async {
+            await wallet.restoreTransaction(transaction);
+
+            if (mounted) {
+              setState(() {});
+            }
+          },
+        ),
+      ),
+    );
+  }
+
+  List<Transaction> get filteredTransactions {
+    final transactions = wallet.transactions.reversed.toList();
+
+    if (selectedFilter == 'IN') {
+      return transactions.where((t) => t.isIn).toList();
+    }
+
+    if (selectedFilter == 'OUT') {
+      return transactions.where((t) => !t.isIn).toList();
+    }
+
+    return transactions;
+  }
+
+  Widget statisticCard(
+      String title,
+      String value,
+      IconData icon,
+      ) {
     return Expanded(
       child: Card(
         child: Padding(
           padding: const EdgeInsets.all(12),
           child: Column(
             children: [
-              Text(label, style: const TextStyle(fontSize: 12)),
-              const SizedBox(height: 4),
-              Text(value, style: const TextStyle(fontWeight: FontWeight.bold)),
+              Icon(icon, size: 25),
+              const SizedBox(height: 8),
+              Text(
+                title,
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontSize: 12),
+              ),
+              const SizedBox(height: 5),
+              Text(
+                value,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 14,
+                ),
+              ),
             ],
           ),
         ),
@@ -132,127 +385,217 @@ class _WalletScreenState extends State<WalletScreen> {
     );
   }
 
+  Widget transactionTile(Transaction transaction) {
+    return Card(
+      child: ListTile(
+        leading: CircleAvatar(
+          backgroundColor: transaction.isIn
+              ? Colors.green.withValues(alpha: 0.12)
+              : Colors.red.withValues(alpha: 0.12),
+          child: Icon(
+            transaction.isIn
+                ? Icons.arrow_downward
+                : Icons.arrow_upward,
+            color: transaction.isIn
+                ? Colors.green
+                : Colors.red,
+          ),
+        ),
+        title: Text(transaction.description),
+        subtitle: Text(
+          transaction.isIn ? 'Money received' : 'Money sent',
+        ),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              '${transaction.isIn ? '+' : '-'}'
+                  '${transaction.amount} RWF',
+              style: TextStyle(
+                color: transaction.isIn
+                    ? Colors.green
+                    : Colors.red,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            IconButton(
+              tooltip: 'Delete transaction',
+              onPressed: () => deleteTransaction(transaction),
+              icon: const Icon(
+                Icons.delete_outline,
+                color: Colors.grey,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    // Real positions of the transactions to show, newest first.
-    final List<int> visible = [];
-    for (int i = wallet.transactions.length - 1; i >= 0; i--) {
-      final t = wallet.transactions[i];
-      if (filter == 'All' ||
-          (filter == 'IN' && t.isIn) ||
-          (filter == 'OUT' && !t.isIn)) {
-        visible.add(i);
-      }
+    if (walletLoading) {
+      return Scaffold(
+        appBar: AppBar(
+          title: const Text('4MoMo Wallet'),
+        ),
+        body: const Center(
+          child: CircularProgressIndicator(),
+        ),
+      );
     }
 
     return Scaffold(
-      appBar: AppBar(title: const Text('4MoMo Wallet')),
-      body: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
+      appBar: AppBar(
+        title: const Text('4MoMo Wallet'),
+        centerTitle: true,
+      ),
+      body: RefreshIndicator(
+        onRefresh: loadRate,
+        child: ListView(
+          padding: const EdgeInsets.all(16),
           children: [
-            // Balance card
             Card(
-              child: Container(
-                width: double.infinity,
+              color: Colors.green.shade700,
+              child: Padding(
                 padding: const EdgeInsets.all(24),
                 child: Column(
                   children: [
-                    const Text('Balance'),
-                    const SizedBox(height: 8),
+                    const Text(
+                      'AVAILABLE BALANCE',
+                      style: TextStyle(
+                        color: Colors.white70,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
                     Text(
                       '${wallet.balance} RWF',
                       style: const TextStyle(
-                        fontSize: 32,
+                        color: Colors.white,
+                        fontSize: 30,
                         fontWeight: FontWeight.bold,
                       ),
+                    ),
+                    const SizedBox(height: 8),
+                    const Text(
+                      'Your money, your control.',
+                      style: TextStyle(color: Colors.white70),
                     ),
                   ],
                 ),
               ),
             ),
-
-            // Statistics
+            const SizedBox(height: 12),
+            rateCard(),
+            const SizedBox(height: 12),
+            const Text(
+              'Wallet Statistics',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
             Row(
               children: [
-                statBox('Total IN', '${wallet.totalIn}'),
-                statBox('Total OUT', '${wallet.totalOut}'),
-                statBox('Lowest balance', '${wallet.lowestBalance}'),
+                statisticCard(
+                  'Money In',
+                  '${wallet.totalIn} RWF',
+                  Icons.south_west,
+                ),
+                statisticCard(
+                  'Money Out',
+                  '${wallet.totalOut} RWF',
+                  Icons.north_east,
+                ),
               ],
             ),
-            const SizedBox(height: 8),
-
-            // Action buttons
             Row(
-              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
               children: [
-                ElevatedButton(
-                  onPressed: () => openScreen(SendScreen(wallet: wallet)),
-                  child: const Text('Send'),
-                ),
-                ElevatedButton(
-                  onPressed: () => openScreen(CashOutScreen(wallet: wallet)),
-                  child: const Text('Cash out'),
-                ),
-                ElevatedButton(
-                  onPressed: showReceiveDialog,
-                  child: const Text('Receive'),
+                statisticCard(
+                  'Lowest Balance',
+                  '${wallet.lowestBalance} RWF',
+                  Icons.account_balance_wallet_outlined,
                 ),
               ],
             ),
             const SizedBox(height: 16),
-
-            // Filter
+            const Text(
+              'Wallet Actions',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: receiveMoney,
+                    icon: const Icon(Icons.call_received),
+                    label: const Text('Receive'),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: openSendScreen,
+                    icon: const Icon(Icons.send),
+                    label: const Text('Send'),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: openCashOutScreen,
+                    icon: const Icon(Icons.money),
+                    label: const Text('Cash Out'),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 20),
+            const Text(
+              'Transaction History',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 8),
             SegmentedButton<String>(
               segments: const [
-                ButtonSegment(value: 'All', label: Text('All')),
-                ButtonSegment(value: 'IN', label: Text('IN')),
-                ButtonSegment(value: 'OUT', label: Text('OUT')),
+                ButtonSegment(
+                  value: 'ALL',
+                  label: Text('All'),
+                ),
+                ButtonSegment(
+                  value: 'IN',
+                  label: Text('IN'),
+                ),
+                ButtonSegment(
+                  value: 'OUT',
+                  label: Text('OUT'),
+                ),
               ],
-              selected: {filter},
+              selected: {selectedFilter},
               onSelectionChanged: (selection) {
                 setState(() {
-                  filter = selection.first;
+                  selectedFilter = selection.first;
                 });
               },
             ),
             const SizedBox(height: 8),
-
-            // Transactions
-            Expanded(
-              child: ListView.builder(
-                itemCount: visible.length,
-                itemBuilder: (context, position) {
-                  final index = visible[position];
-                  final t = wallet.transactions[index];
-                  final color = t.isIn ? green : red;
-
-                  return ListTile(
-                    title: Text(t.description),
-                    subtitle: Text(
-                      t.isIn ? 'IN' : 'OUT',
-                      style: TextStyle(color: color),
-                    ),
-                    trailing: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          '${t.amount} RWF',
-                          style: TextStyle(
-                            color: color,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        IconButton(
-                          icon: const Icon(Icons.delete_outline),
-                          onPressed: () => deleteTransaction(index),
-                        ),
-                      ],
-                    ),
-                  );
-                },
-              ),
-            ),
+            if (filteredTransactions.isEmpty)
+              const Padding(
+                padding: EdgeInsets.all(24),
+                child: Center(
+                  child: Text('No transactions to show.'),
+                ),
+              )
+            else
+              ...filteredTransactions.map(transactionTile),
           ],
         ),
       ),

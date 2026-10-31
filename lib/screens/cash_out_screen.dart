@@ -3,7 +3,11 @@ import '../logic/wallet.dart';
 
 class CashOutScreen extends StatefulWidget {
   final Wallet wallet;
-  const CashOutScreen({super.key, required this.wallet});
+
+  const CashOutScreen({
+    super.key,
+    required this.wallet,
+  });
 
   @override
   State<CashOutScreen> createState() => _CashOutScreenState();
@@ -11,9 +15,8 @@ class CashOutScreen extends StatefulWidget {
 
 class _CashOutScreenState extends State<CashOutScreen> {
   final amountController = TextEditingController();
-  String? error;
-  Map<int, int>? notes; // null = notes not shown yet
-  int amount = 0;
+  List<int> notes = [];
+  String? errorMessage;
 
   @override
   void dispose() {
@@ -21,75 +24,134 @@ class _CashOutScreenState extends State<CashOutScreen> {
     super.dispose();
   }
 
-  // Step 1: check the amount and show the notes. Nothing moves yet.
-  void showNotes() {
-    final result = widget.wallet.checkCashOut(amountController.text);
+  void confirmCashOut() {
+    final amount = int.tryParse(amountController.text.trim());
 
-    if (result != null) {
+    if (amount == null || amount <= 0) {
       setState(() {
-        error = result;
-        notes = null;
+        errorMessage = 'Enter a valid positive whole amount.';
+        notes = [];
       });
       return;
     }
 
-    final value = int.parse(amountController.text.trim());
-    setState(() {
-      error = null;
-      amount = value;
-      notes = widget.wallet.notesFor(value);
-    });
-  }
+    if (amount > widget.wallet.balance) {
+      setState(() {
+        errorMessage = 'Insufficient wallet balance.';
+        notes = [];
+      });
+      return;
+    }
 
-  // Step 2: only now does the money move.
-  void confirm() {
-    widget.wallet.cashOut(amount);
-    Navigator.pop(context);
+    final calculatedNotes = widget.wallet.notesFor(amount);
+
+    if (calculatedNotes.isEmpty) {
+      setState(() {
+        errorMessage = 'This amount cannot be paid using available notes.';
+        notes = [];
+      });
+      return;
+    }
+
+    setState(() {
+      errorMessage = null;
+      notes = calculatedNotes;
+    });
+
+    showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Confirm Cash Out'),
+        content: Text(
+          'Cash out $amount RWF?\n'
+              'Notes to give the agent: ${calculatedNotes.join(', ')} RWF',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              Navigator.pop(dialogContext);
+
+              try {
+                await widget.wallet.cashOut(amount);
+
+                if (!mounted) return;
+
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Cash out successful!'),
+                  ),
+                );
+
+                Navigator.pop(context, true);
+              } catch (e) {
+                if (!mounted) return;
+
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('Cash out failed: $e')),
+                );
+              }
+            },
+            child: const Text('Confirm'),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Cash out')),
+      appBar: AppBar(title: const Text('Cash Out')),
       body: Padding(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(20),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            Text(
+              'Available balance: ${widget.wallet.balance} RWF',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 20),
             TextField(
               controller: amountController,
-              decoration: const InputDecoration(labelText: 'Amount (RWF)'),
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(
+                labelText: 'Amount (RWF)',
+                border: OutlineInputBorder(),
+              ),
               onChanged: (_) {
-                // The amount changed, so the notes on screen are out of date.
                 setState(() {
-                  notes = null;
-                  error = null;
+                  errorMessage = null;
+                  notes = [];
                 });
               },
             ),
             const SizedBox(height: 16),
-            if (error != null)
-              Text(error!, style: TextStyle(color: Colors.red.shade700)),
-            const SizedBox(height: 16),
-            ElevatedButton(
-              onPressed: showNotes,
-              child: const Text('Show notes'),
-            ),
-            if (notes != null) ...[
-              const SizedBox(height: 24),
-              Text('The agent will give you $amount RWF in notes:'),
-              const SizedBox(height: 8),
-              for (final entry in notes!.entries)
-                Text(
-                  '${entry.key} × ${entry.value}',
-                  style: const TextStyle(fontSize: 18),
-                ),
-              const SizedBox(height: 24),
-              ElevatedButton(
-                onPressed: confirm,
-                child: const Text('Confirm'),
+            if (errorMessage != null)
+              Text(
+                errorMessage!,
+                style: const TextStyle(color: Colors.red),
               ),
+            if (notes.isNotEmpty) ...[
+              const Text(
+                'Notes to give the agent:',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 8),
+              Text(notes.map((note) => '$note RWF').join('\n')),
             ],
+            const Spacer(),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton(
+                onPressed: confirmCashOut,
+                child: const Text('Confirm Cash Out'),
+              ),
+            ),
           ],
         ),
       ),
