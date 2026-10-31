@@ -1,7 +1,6 @@
 
-import 'dart:convert';
-
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:cloud_firestore/cloud_firestore.dart' hide Transaction;
+import 'package:firebase_auth/firebase_auth.dart';
 
 import '../models/transaction.dart';
 
@@ -12,53 +11,67 @@ class Wallet {
 
   final List<int> notes = [5000, 2000, 1000, 500, 100];
 
-  static const String storageKey = 'wallet_transactions';
+  // Get the signed-in user's transaction collection.
+  CollectionReference<Map<String, dynamic>> get transactionCollection {
+    final user = FirebaseAuth.instance.currentUser;
 
-  // Load saved transactions, or create sample transactions for a new wallet.
-  Future<void> load() async {
-    final prefs = await SharedPreferences.getInstance();
-    final savedTransactions = prefs.getString(storageKey);
-
-    if (savedTransactions != null) {
-      final List<dynamic> decoded = jsonDecode(savedTransactions);
-
-      transactions = decoded.map((item) {
-        return Transaction.fromJson(
-          Map<String, dynamic>.from(item),
-        );
-      }).toList();
-    } else {
-      transactions = [
-        Transaction(
-          description: 'Salary',
-          amount: 5000,
-          isIn: true,
-        ),
-        Transaction(
-          description: 'Sent to 0788123456',
-          amount: 1500,
-          isIn: false,
-        ),
-        Transaction(
-          description: 'Cash out',
-          amount: 3500,
-          isIn: false,
-        ),
-      ];
-
-      await save();
+    if (user == null) {
+      throw Exception('Please sign in to access your wallet.');
     }
+
+    return FirebaseFirestore.instance
+        .collection('users')
+        .doc(user.uid)
+        .collection('transactions');
   }
 
-  // Save transactions on the device.
-  Future<void> save() async {
-    final prefs = await SharedPreferences.getInstance();
+  // Load the signed-in user's transactions.
+  Future<void> load() async {
+    final snapshot = await transactionCollection
+        .orderBy('createdAt')
+        .get();
 
-    final encoded = jsonEncode(
-      transactions.map((transaction) => transaction.toJson()).toList(),
+    transactions = snapshot.docs.map((document) {
+      return Transaction.fromJson(
+        document.data(),
+        id: document.id,
+      );
+    }).toList();
+  }
+
+  // Listen for live transaction updates from Firestore.
+  Stream<List<Transaction>> watchTransactions() {
+    return transactionCollection
+        .orderBy('createdAt')
+        .snapshots()
+        .map((snapshot) {
+      return snapshot.docs.map((document) {
+        return Transaction.fromJson(
+          document.data(),
+          id: document.id,
+        );
+      }).toList();
+    });
+  }
+
+  // Save a new transaction in Firestore.
+  Future<void> addTransaction(Transaction transaction) async {
+    final document = await transactionCollection.add({
+      'description': transaction.description,
+      'amount': transaction.amount,
+      'isIn': transaction.isIn,
+      'createdAt': Timestamp.fromDate(transaction.createdAt),
+    });
+
+    transactions.add(
+      Transaction(
+        id: document.id,
+        description: transaction.description,
+        amount: transaction.amount,
+        isIn: transaction.isIn,
+        createdAt: transaction.createdAt,
+      ),
     );
-
-    await prefs.setString(storageKey, encoded);
   }
 
   // Calculate the current wallet balance.
@@ -107,7 +120,6 @@ class Wallet {
   }
 
   // Receive money.
-  // Accepts either an int or a numeric String for compatibility with screens.
   Future<void> receive(String description, dynamic amount) async {
     final cleanDescription = description.trim();
     final parsedAmount = int.tryParse(amount.toString().trim());
@@ -120,15 +132,13 @@ class Wallet {
       throw Exception('Enter a valid positive amount.');
     }
 
-    transactions.add(
+    await addTransaction(
       Transaction(
         description: cleanDescription,
         amount: parsedAmount,
         isIn: true,
       ),
     );
-
-    await save();
   }
 
   // Send money to a phone number.
@@ -150,18 +160,16 @@ class Wallet {
       throw Exception('Insufficient balance.');
     }
 
-    transactions.add(
+    await addTransaction(
       Transaction(
         description: 'Sent to $cleanPhone',
         amount: parsedAmount,
         isIn: false,
       ),
     );
-
-    await save();
   }
 
-  // Check whether an amount can be paid using the available banknotes.
+  // Check whether an amount can be paid using available banknotes.
   List<int> notesFor(int amount) {
     if (amount <= 0) return [];
 
@@ -175,7 +183,6 @@ class Wallet {
       }
     }
 
-    // Return no notes if the exact amount cannot be made.
     if (remaining != 0) {
       return [];
     }
@@ -183,7 +190,7 @@ class Wallet {
     return selectedNotes;
   }
 
-  // Validate a cash-out amount supplied as text.
+  // Validate a cash-out amount.
   bool checkCashOut(String amount) {
     final parsedAmount = int.tryParse(amount.trim());
 
@@ -214,55 +221,70 @@ class Wallet {
       );
     }
 
-    transactions.add(
+    await addTransaction(
       Transaction(
         description: 'Cash out',
         amount: amount,
         isIn: false,
       ),
     );
-
-    await save();
   }
 
-  // Delete a transaction by its index in the original list.
+  // Delete a transaction by its index.
   Future<bool> delete(int index) async {
     if (index < 0 || index >= transactions.length) {
       return false;
     }
+
+    final transaction = transactions[index];
 
     final remainingTransactions = List<Transaction>.from(transactions);
     remainingTransactions.removeAt(index);
 
     int calculatedBalance = startBalance;
 
-    for (final transaction in remainingTransactions) {
-      calculatedBalance += transaction.isIn
-          ? transaction.amount
-          : -transaction.amount;
+    for (final item in remainingTransactions) {
+      calculatedBalance += item.isIn ? item.amount : -item.amount;
 
       if (calculatedBalance < 0) {
         return false;
       }
     }
 
+    if (transaction.id.isEmpty) {
+      throw Exception('This transaction has no Firestore document ID.');
+    }
+
+    await transactionCollection.doc(transaction.id).delete();
+
     transactions.removeAt(index);
-    await save();
 
     return true;
   }
 
-  // Restore a previously deleted transaction at its original position.
+  // Restore a deleted transaction.
   Future<void> restore(int index, Transaction transaction) async {
-    final safeIndex = index.clamp(0, transactions.length);
+    if (transaction.id.isEmpty) {
+      await addTransaction(transaction);
+      return;
+    }
 
+    await transactionCollection.doc(transaction.id).set({
+      'description': transaction.description,
+      'amount': transaction.amount,
+      'isIn': transaction.isIn,
+      'createdAt': Timestamp.fromDate(transaction.createdAt),
+    });
+
+    final safeIndex = index.clamp(0, transactions.length);
     transactions.insert(safeIndex, transaction);
-    await save();
   }
 
   // Compatibility method for screens that delete by Transaction object.
   Future<bool> deleteTransaction(Transaction transaction) async {
-    final index = transactions.indexOf(transaction);
+    final index = transactions.indexWhere(
+          (item) => item.id == transaction.id,
+    );
 
     if (index == -1) {
       return false;
@@ -273,7 +295,27 @@ class Wallet {
 
   // Compatibility method for screens that restore by Transaction object.
   Future<void> restoreTransaction(Transaction transaction) async {
-    transactions.add(transaction);
-    await save();
+    await restore(transactions.length, transaction);
+  }
+
+  // Edit an existing transaction.
+  Future<void> updateTransaction(Transaction transaction) async {
+    if (transaction.id.isEmpty) {
+      throw Exception('This transaction has no Firestore document ID.');
+    }
+
+    await transactionCollection.doc(transaction.id).update({
+      'description': transaction.description,
+      'amount': transaction.amount,
+      'isIn': transaction.isIn,
+    });
+
+    final index = transactions.indexWhere(
+          (item) => item.id == transaction.id,
+    );
+
+    if (index != -1) {
+      transactions[index] = transaction;
+    }
   }
 }

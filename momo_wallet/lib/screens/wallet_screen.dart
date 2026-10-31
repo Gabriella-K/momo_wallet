@@ -1,4 +1,6 @@
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 
@@ -16,7 +18,9 @@ class WalletScreen extends StatefulWidget {
 }
 
 class _WalletScreenState extends State<WalletScreen> {
-  final Wallet wallet = Wallet();
+  late final Wallet wallet;
+
+  StreamSubscription<List<Transaction>>? transactionSubscription;
 
   double? rate;
   bool rateLoading = true;
@@ -28,23 +32,55 @@ class _WalletScreenState extends State<WalletScreen> {
   @override
   void initState() {
     super.initState();
+
+    wallet = Wallet();
     initializeWallet();
   }
 
   Future<void> initializeWallet() async {
     try {
+      // Load the initial transactions.
       await wallet.load();
+
+      if (!mounted) return;
+
+      // Listen for live Firestore updates.
+      transactionSubscription = wallet.watchTransactions().listen(
+            (updatedTransactions) {
+          if (!mounted) return;
+
+          setState(() {
+            wallet.transactions = updatedTransactions;
+            walletLoading = false;
+          });
+        },
+        onError: (error) {
+          debugPrint('Live transaction error: $error');
+
+          if (!mounted) return;
+
+          setState(() {
+            walletLoading = false;
+          });
+        },
+      );
     } catch (e) {
       debugPrint('Wallet loading error: $e');
+
+      if (!mounted) return;
+
+      setState(() {
+        walletLoading = false;
+      });
     }
 
-    if (!mounted) return;
-
-    setState(() {
-      walletLoading = false;
-    });
-
     await loadRate();
+  }
+
+  @override
+  void dispose() {
+    transactionSubscription?.cancel();
+    super.dispose();
   }
 
   Future<void> loadRate() async {
@@ -224,6 +260,7 @@ class _WalletScreenState extends State<WalletScreen> {
                   onPressed: () async {
                     final description =
                     descriptionController.text.trim();
+
                     final amount =
                     int.tryParse(amountController.text.trim());
 
@@ -301,8 +338,7 @@ class _WalletScreenState extends State<WalletScreen> {
   }
 
   Future<void> deleteTransaction(Transaction transaction) async {
-    final removed =
-    await wallet.deleteTransaction(transaction);
+    final removed = await wallet.deleteTransaction(transaction);
 
     if (!mounted) return;
 
@@ -487,8 +523,11 @@ class _WalletScreenState extends State<WalletScreen> {
               ),
             ),
             const SizedBox(height: 12),
+
             rateCard(),
+
             const SizedBox(height: 12),
+
             const Text(
               'Wallet Statistics',
               style: TextStyle(
@@ -496,6 +535,7 @@ class _WalletScreenState extends State<WalletScreen> {
                 fontWeight: FontWeight.bold,
               ),
             ),
+
             Row(
               children: [
                 statisticCard(
@@ -510,6 +550,7 @@ class _WalletScreenState extends State<WalletScreen> {
                 ),
               ],
             ),
+
             Row(
               children: [
                 statisticCard(
@@ -519,7 +560,9 @@ class _WalletScreenState extends State<WalletScreen> {
                 ),
               ],
             ),
+
             const SizedBox(height: 16),
+
             const Text(
               'Wallet Actions',
               style: TextStyle(
@@ -527,7 +570,9 @@ class _WalletScreenState extends State<WalletScreen> {
                 fontWeight: FontWeight.bold,
               ),
             ),
+
             const SizedBox(height: 8),
+
             Row(
               children: [
                 Expanded(
@@ -555,7 +600,9 @@ class _WalletScreenState extends State<WalletScreen> {
                 ),
               ],
             ),
+
             const SizedBox(height: 20),
+
             const Text(
               'Transaction History',
               style: TextStyle(
@@ -563,7 +610,9 @@ class _WalletScreenState extends State<WalletScreen> {
                 fontWeight: FontWeight.bold,
               ),
             ),
+
             const SizedBox(height: 8),
+
             SegmentedButton<String>(
               segments: const [
                 ButtonSegment(
@@ -586,7 +635,9 @@ class _WalletScreenState extends State<WalletScreen> {
                 });
               },
             ),
+
             const SizedBox(height: 8),
+
             if (filteredTransactions.isEmpty)
               const Padding(
                 padding: EdgeInsets.all(24),
